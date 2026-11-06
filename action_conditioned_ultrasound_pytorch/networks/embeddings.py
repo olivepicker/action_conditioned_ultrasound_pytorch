@@ -57,3 +57,52 @@ class TimeOffsetEmbedding(TimestepEmbedding):
 
     def forward(self, time_offset):
         return super().forward(time_offset * self.time_scale)
+
+
+class PatchEmbedding(nn.Module):
+    def __init__(self, in_channels, dim, patch_size=2):
+        super().__init__()
+        self.patch_size = patch_size
+        self.proj = nn.Conv2d(in_channels, dim, patch_size, stride=patch_size)
+
+    def forward(self, x):
+        assert x.shape[-2] % self.patch_size == 0 and x.shape[-1] % self.patch_size == 0
+
+        if x.ndim == 5:
+            b, t = x.shape[:2]
+            x = rearrange(x, 'b t c h w -> (b t) c h w')
+            x = self.proj(x)
+            return rearrange(x, '(b t) d h w -> b t (h w) d', b=b, t=t)
+
+        x = self.proj(x)
+        return rearrange(x, 'b d h w -> b (h w) d')
+
+
+class PositionalEmbedding(nn.Module):
+    def __init__(self, dim, max_period=10000):
+        super().__init__()
+        assert dim % 4 == 0
+
+        n = dim // 4
+        freqs = torch.exp(
+            -math.log(max_period) * torch.arange(n).float() / n
+        )
+        self.register_buffer('freqs', freqs, persistent=False)
+
+    def forward(self, tokens, height, width):
+        assert tokens.shape[-2] == height * width
+
+        y, x = torch.meshgrid(
+            torch.arange(height, device=tokens.device),
+            torch.arange(width, device=tokens.device),
+            indexing='ij'
+        )
+
+        y = y.reshape(-1, 1) * self.freqs
+        x = x.reshape(-1, 1) * self.freqs
+
+        pos = torch.cat(
+            [y.sin(), y.cos(), x.sin(), x.cos()], dim=-1
+        )
+
+        return tokens + pos.to(dtype=tokens.dtype)
