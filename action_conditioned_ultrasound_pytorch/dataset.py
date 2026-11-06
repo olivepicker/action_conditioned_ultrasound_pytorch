@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 from .pose import relative_pose
 
 
-class USVLAMetadata:
+class USVLAMetadata:    # potentially unused
     def __init__(self, root):
         self.root = Path(root)
         self.info = json.loads((self.root / 'meta/info.json').read_text())

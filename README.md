@@ -3,25 +3,22 @@
 Unofficial PyTorch implementation of [Action-Conditioned World Model for Goal Plane Guidance in Robotic Neck Ultrasound](https://arxiv.org/abs/2607.21918) from Fan et al.
 
 ## Todo
-- [x] Implement US-PPNR episode metadata loader
-- [ ] Implement relative 6DoF probe motion
-- [ ] Implement ultrasound frame dataset
-- [ ] Integrate pretrained VAE
-- [ ] Implement action and temporal embeddings
-- [ ] Implement conditional latent diffusion transformer
-- [ ] Train world model
-- [ ] Sample future ultrasound frames (sanity check)
-- [ ] Evaluate action conditioning
+- [x] Implement US-VLA episode metadata loader
+- [ ] Verify action and goal-label semantics
+- [x] Implement relative 6DoF probe motion
+- [x] Define world model dataset interface
+- [ ] Implement ultrasound image loading and preprocessing
+- [x] Implement Gaussian VAE
+- [ ] Pretrain and freeze VAE
+- [ ] Implement conditional diffusion transformer
+- [ ] Train action-conditioned world model
 - [ ] Implement goal-conditioned action predictor
+- [ ] Train imitation policy
+- [ ] Implement frozen-world-model actor-critic training
+- [ ] Evaluate world model and policy
 
 ## Usage
 ```python
-from action_conditioned_ultrasound_pytorch.dataset import USPPNRMetadata
-
-dataset = USPPNRMetadata('../dataset/orig')
-episode = dataset[0]
-
-print(episode['probe_pose'].shape)
 ```
 
 ## Citations
