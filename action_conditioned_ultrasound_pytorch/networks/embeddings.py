@@ -4,6 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from einops import rearrange
+
 
 class TimestepEmbedding(nn.Module):
     def __init__(self, dim, freq_dim=256, max_period=10000):

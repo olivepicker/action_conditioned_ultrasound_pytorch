@@ -1,3 +1,7 @@
 
 # file name
-*test*
+test.ipynb
+smoke.py
+
+# folder
+*pycache*
