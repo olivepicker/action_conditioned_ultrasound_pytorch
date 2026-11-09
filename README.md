@@ -7,10 +7,10 @@ Unofficial PyTorch implementation of [Action-Conditioned World Model for Goal Pl
 - [ ] Verify action and goal-label semantics
 - [x] Implement relative 6DoF probe motion
 - [x] Define world model dataset interface
-- [ ] Implement ultrasound image loading and preprocessing
+- [x] Implement ultrasound image loading and preprocessing
 - [x] Implement Gaussian VAE
 - [ ] Pretrain and freeze VAE
-- [ ] Implement conditional diffusion transformer
+- [x] Implement conditional diffusion transformer
 - [ ] Train action-conditioned world model
 - [ ] Implement goal-conditioned action predictor
 - [ ] Train imitation policy
