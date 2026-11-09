@@ -126,7 +126,8 @@ class WorldModelDataset(Dataset):
         image_mode='RGB',
         normalize='minus_one_one',
         center_crop=False,
-        cache_size=2
+        cache_size=2,
+        relative_frame='tool'
     ):
         self.episodes = [metadata[i] for i in range(len(metadata))]
         self.image_loader = image_loader if image_loader is not None else USVLAImageLoader(
@@ -140,6 +141,7 @@ class WorldModelDataset(Dataset):
         self.context_length = context_length
         self.context_stride = context_stride
         self.rotation_type = rotation_type
+        self.relative_frame = relative_frame
 
         self.indices = [
             (episode_index, t, offset)
@@ -175,7 +177,8 @@ class WorldModelDataset(Dataset):
         action = relative_pose(
             episode['state'][t],
             episode['state'][target_t],
-            rotation_type=self.rotation_type
+            rotation_type=self.rotation_type,
+            reference_frame=self.relative_frame
         )
 
         time_offset = episode['timestamp'][target_t] - episode['timestamp'][t]
