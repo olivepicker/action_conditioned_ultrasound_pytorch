@@ -2,7 +2,13 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 
-def relative_pose(source, target, rotation_type='euler', reference_frame='tool'):
+def relative_pose(
+    source,
+    target,
+    rotation_type='euler',
+    reference_frame='tool',
+    output_rotation_type='euler'
+):
     source = np.asarray(source, dtype=np.float64)[..., :6]
     target = np.asarray(target, dtype=np.float64)[..., :6]
 
@@ -28,4 +34,11 @@ def relative_pose(source, target, rotation_type='euler', reference_frame='tool')
     else:
         raise ValueError(reference_frame)
 
-    return np.concatenate((translation, rotation.as_rotvec()), axis=-1)
+    if output_rotation_type == 'euler':
+        orientation = rotation.as_euler('xyz')
+    elif output_rotation_type == 'rotvec':
+        orientation = rotation.as_rotvec()
+    else:
+        raise ValueError(output_rotation_type)
+
+    return np.concatenate((translation, orientation), axis=-1)
