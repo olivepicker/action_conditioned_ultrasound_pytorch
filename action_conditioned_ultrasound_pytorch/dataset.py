@@ -189,3 +189,41 @@ class WorldModelDataset(Dataset):
             'action': torch.as_tensor(action, dtype=torch.float32),
             'time_offset': torch.as_tensor(time_offset, dtype=torch.float32)
         }
+
+
+class VAEDataset(Dataset):
+    def __init__(
+        self,
+        metadata,
+        image_loader=None,
+        frame_stride=1,
+        image_size=(96, 128),
+        image_mode='RGB',
+        normalize='minus_one_one',
+        center_crop=False,
+        cache_size=2
+    ):
+        if frame_stride < 1:
+            raise ValueError('frame_stride must be positive')
+
+        self.image_loader = image_loader if image_loader is not None else USVLAImageLoader(
+            metadata,
+            image_size=image_size,
+            image_mode=image_mode,
+            normalize=normalize,
+            center_crop=center_crop,
+            cache_size=cache_size
+        )
+        self.indices = [
+            (episode_index, int(frame_index))
+            for episode_index, path in enumerate(metadata.paths)
+            for frame_index in pd.read_parquet(path, columns=['frame_index'])['frame_index'].iloc[::frame_stride]
+        ]
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        episode_index, frame_index = self.indices[idx]
+
+        return self.image_loader(episode_index, frame_index)
