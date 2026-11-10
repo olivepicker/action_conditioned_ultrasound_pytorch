@@ -118,3 +118,122 @@ class WorldModelTrainer:
                 self.save_checkpoint('best.pt')
 
             print(f'Epoch {self.epoch}: train_loss={train_loss:.6f}, valid_loss={valid_loss:.6f}')
+
+
+class VAETrainer:
+    def __init__(
+        self,
+        vae,
+        optimizer,
+        train_ds,
+        valid_ds,
+        num_epochs=100,
+        batch_size=4,
+        num_workers=4,
+        device='cuda',
+        save_path='vae_output'
+    ):
+        self.device = torch.device(device)
+        self.vae = vae.to(self.device)
+        self.optimizer = optimizer
+        self.num_epochs = num_epochs
+        self.epoch = 0
+        self.best_valid_loss = float('inf')
+
+        self.train_dl = DataLoader(
+            train_ds,
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=self.device.type == 'cuda'
+        )
+        self.valid_dl = DataLoader(
+            valid_ds,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=self.device.type == 'cuda'
+        )
+
+        self.save_path = Path(save_path)
+        self.save_path.mkdir(parents=True, exist_ok=True)
+
+    def train_one_step(self, batch):
+        self.vae.train()
+        self.optimizer.zero_grad(set_to_none=True)
+
+        images = batch.to(self.device, non_blocking=True)
+        out = self.vae(images)
+        out['loss'].backward()
+        self.optimizer.step()
+
+        return {
+            'loss': out['loss'].detach(),
+            'recon_loss': out['recon_loss'].detach(),
+            'kl_loss': out['kl_loss'].detach()
+        }
+
+    @torch.no_grad()
+    def valid_one_step(self, batch):
+        self.vae.eval()
+        images = batch.to(self.device, non_blocking=True)
+        out = self.vae(images)
+
+        return {
+            'loss': out['loss'].detach(),
+            'recon_loss': out['recon_loss'].detach(),
+            'kl_loss': out['kl_loss'].detach()
+        }
+
+    def save_checkpoint(self, filename):
+        torch.save({
+            'epoch': self.epoch,
+            'vae': self.vae.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'best_valid_loss': self.best_valid_loss
+        }, self.save_path / filename)
+
+    def load_checkpoint(self, path):
+        checkpoint = torch.load(path, map_location=self.device, weights_only=True)
+        self.vae.load_state_dict(checkpoint['vae'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        self.epoch = checkpoint['epoch']
+        self.best_valid_loss = checkpoint['best_valid_loss']
+
+    def run_epoch(self, dataloader, training):
+        totals = {'loss': 0.0, 'recon_loss': 0.0, 'kl_loss': 0.0}
+        step = self.train_one_step if training else self.valid_one_step
+        phase = 'Train' if training else 'Valid'
+        count = 0
+
+        for batch in tqdm(dataloader, desc=f'{phase} {self.epoch + 1}/{self.num_epochs}'):
+            out = step(batch)
+            batch_size = batch.shape[0]
+            count += batch_size
+
+            for key in totals:
+                totals[key] += out[key].item() * batch_size
+
+        return {key: value / count for key, value in totals.items()}
+
+    def train(self):
+        for epoch in range(self.epoch, self.num_epochs):
+            train_metrics = self.run_epoch(self.train_dl, training=True)
+            valid_metrics = self.run_epoch(self.valid_dl, training=False)
+
+            self.epoch = epoch + 1
+            is_best = valid_metrics['loss'] < self.best_valid_loss
+            if is_best:
+                self.best_valid_loss = valid_metrics['loss']
+
+            self.save_checkpoint('last.pt')
+            if is_best:
+                self.save_checkpoint('best.pt')
+
+            print(
+                f'Epoch {self.epoch}: '
+                f'train_loss={train_metrics["loss"]:.6f}, '
+                f'valid_loss={valid_metrics["loss"]:.6f}, '
+                f'valid_recon={valid_metrics["recon_loss"]:.6f}, '
+                f'valid_kl={valid_metrics["kl_loss"]:.6f}'
+            )

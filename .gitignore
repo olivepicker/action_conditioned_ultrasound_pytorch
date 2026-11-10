@@ -6,3 +6,4 @@ smoke.py
 # folder
 *pycache*
 tests
+*output*
