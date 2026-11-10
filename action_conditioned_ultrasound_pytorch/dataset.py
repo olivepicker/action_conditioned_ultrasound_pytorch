@@ -127,7 +127,8 @@ class WorldModelDataset(Dataset):
         normalize='minus_one_one',
         center_crop=False,
         cache_size=2,
-        relative_frame='tool'
+        relative_frame='tool',
+        output_rotation_type='euler'
     ):
         self.episodes = [metadata[i] for i in range(len(metadata))]
         self.image_loader = image_loader if image_loader is not None else USVLAImageLoader(
@@ -142,6 +143,7 @@ class WorldModelDataset(Dataset):
         self.context_stride = context_stride
         self.rotation_type = rotation_type
         self.relative_frame = relative_frame
+        self.output_rotation_type = output_rotation_type
 
         self.indices = [
             (episode_index, t, offset)
@@ -178,9 +180,10 @@ class WorldModelDataset(Dataset):
             episode['state'][t],
             episode['state'][target_t],
             rotation_type=self.rotation_type,
-            reference_frame=self.relative_frame
+            reference_frame=self.relative_frame,
+            output_rotation_type=self.output_rotation_type
         )
-
+        
         time_offset = episode['timestamp'][target_t] - episode['timestamp'][t]
 
         return {
