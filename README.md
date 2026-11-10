@@ -3,19 +3,25 @@
 Unofficial PyTorch implementation of [Action-Conditioned World Model for Goal Plane Guidance in Robotic Neck Ultrasound](https://arxiv.org/abs/2607.21918) from Fan et al.
 
 ## Todo
-- [x] Implement US-VLA episode metadata loader
-- [ ] Verify action and goal-label semantics
-- [x] Implement relative 6DoF probe motion
-- [x] Define world model dataset interface
-- [x] Implement ultrasound image loading and preprocessing
-- [x] Implement Gaussian VAE
-- [ ] Pretrain and freeze VAE
+
+##### Stage 0: Data & VAE
+- [x] Implement dataset and preprocessing
+- [x] Verify 6DoF pose and action semantics
+- [x] Implement and pretrain Gaussian VAE
+
+##### Stage 1: World Model
 - [x] Implement conditional diffusion transformer
-- [ ] Train action-conditioned world model
+- [x] Implement diffusion schedule and DDIM sampler
+- [x] Implement world model training pipeline
+- [ ] Complete world model training
+- [ ] Evaluate future prediction and action conditioning (sample data, we use US-VLA)
+
+##### Stage 2: Action Prediction
+- [ ] Verify goal-label semantics
 - [ ] Implement goal-conditioned action predictor
 - [ ] Train imitation policy
 - [ ] Implement frozen-world-model actor-critic training
-- [ ] Evaluate world model and policy
+- [ ] Evaluate goal-conditioned policy
 
 ## Usage
 ```python
