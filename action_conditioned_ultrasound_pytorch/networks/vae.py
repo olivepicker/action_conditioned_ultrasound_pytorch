@@ -99,6 +99,7 @@ class Encoder(nn.Module):
         hidden_channels: int = 128,
         latent_dim: int = 256,
         using_mid_attn: bool = True,
+        downsample_factor: int = 8,
     ):
         super().__init__()
 
@@ -122,7 +123,7 @@ class Encoder(nn.Module):
         self.down3 = nn.Sequential(
             ResBlock(hidden_channels * 4, hidden_channels * 8),
             ResBlock(hidden_channels * 8, hidden_channels * 8),
-            Downsample2x(hidden_channels * 8),
+            Downsample2x(hidden_channels * 8) if downsample_factor == 16 else nn.Identity(),
         )
 
         self.mid_block1 = ResBlock(hidden_channels * 8, hidden_channels * 8)
@@ -154,6 +155,7 @@ class Decoder(nn.Module):
         hidden_channels: int = 128,
         latent_dim: int = 256,
         using_mid_attn: bool = True,
+        downsample_factor: int = 8,
     ):
         super().__init__()
 
@@ -183,7 +185,7 @@ class Decoder(nn.Module):
             ResBlock(hidden_channels * 1, hidden_channels * 1),
         )
         self.up4 = nn.Sequential(
-            Upsample2x(hidden_channels * 1),
+            Upsample2x(hidden_channels * 1) if downsample_factor == 16 else nn.Identity(),
             ResBlock(hidden_channels * 1, hidden_channels * 1),
             ResBlock(hidden_channels * 1, hidden_channels * 1),
         )
@@ -213,8 +215,13 @@ class VAE(nn.Module):
         kl_weight: float = 1e-4,
         recon_loss_type: str = 'l1',
         using_mid_attn: bool = True,
+        downsample_factor: int = 8,
     ):
         super().__init__()
+
+        if downsample_factor not in (8, 16):
+            raise ValueError(downsample_factor)
+
         self.kl_weight = kl_weight
         self.recon_loss_type = recon_loss_type
 
@@ -223,12 +230,14 @@ class VAE(nn.Module):
             hidden_channels=hidden_channels,
             latent_dim=latent_dim * 2,
             using_mid_attn=using_mid_attn,
+            downsample_factor=downsample_factor,
         )
         self.decoder = Decoder(
             out_channels=in_channels,
             hidden_channels=hidden_channels,
             latent_dim=latent_dim,
             using_mid_attn=using_mid_attn,
+            downsample_factor=downsample_factor,
         )
 
     def reparameterize(self, mu, logvar):
