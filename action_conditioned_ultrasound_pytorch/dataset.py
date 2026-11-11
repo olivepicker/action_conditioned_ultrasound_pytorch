@@ -1,49 +1,105 @@
 import json
+import os
+import subprocess
 from collections import OrderedDict
-from io import BytesIO
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
-from PIL import Image
 from torch.utils.data import Dataset
 
 from .pose import relative_pose
 
 
-class USVLAMetadata:
-    def __init__(self, root, episode_indices=None):
+class SonATAMetadata:
+    def __init__(self, root, split=None, episode_indices=None):
         self.root = Path(root)
         self.info = json.loads((self.root / 'meta/info.json').read_text())
-        self.paths = sorted((self.root / 'data').glob('chunk-*/episode_*.parquet'))
+
+        self.paths = sorted(
+            (self.root / 'data').glob('chunk-*/episode_*.parquet'),
+            key=lambda path: int(path.stem.split('_')[-1])
+        )
+
+        if split is not None:
+            start, end = map(int, self.info['splits'][split].split(':'))
+            self.paths = [
+                path for path in self.paths
+                if start <= int(path.stem.split('_')[-1]) < end
+            ]
 
         if episode_indices is not None:
-            self.paths = [self.paths[i] for i in episode_indices]
+            indices = set(episode_indices)
+            self.paths = [
+                path for path in self.paths
+                if int(path.stem.split('_')[-1]) in indices
+            ]
+
+        self.episode_ids = [
+            int(path.stem.split('_')[-1])
+            for path in self.paths
+        ]
+
+        with open(self.root / 'meta/episodes.jsonl') as f:
+            self.lengths = {
+                ep['episode_index']: ep['length']
+                for ep in map(json.loads, f)
+            }
 
     def __len__(self):
         return len(self.paths)
 
+    def video_path(self, idx):
+        episode_id = self.episode_ids[idx]
+        chunk = episode_id // self.info['chunks_size']
+
+        return (
+            self.root
+            / f'videos/chunk-{chunk:03d}'
+            / 'observation.images.ultrasound'
+            / f'episode_{episode_id:06d}.mp4'
+        )
+
     def __getitem__(self, idx):
         df = pd.read_parquet(self.paths[idx], columns=[
-            'episode_index', 'frame_index', 'timestamp', 'state',
-            'actions', 'task_index', 'prompt', 'us_gt', 'stage'
+            'episode_index',
+            'frame_index',
+            'timestamp',
+            'action',
+            'observation.state',
+            'observation.meta.probe_cali_mtx',
+            'task_index',
+            'instruction.text',
+            'instruction.task',
+            'instruction.sub_task',
+            'instruction.phantom'
         ])
+
+        frame_index = df['frame_index'].to_numpy()
+
+        if not np.array_equal(frame_index, np.arange(len(df))):
+            raise ValueError('Non-contiguous frame indices')
+
+        if len(df) != self.lengths[self.episode_ids[idx]]:
+            raise ValueError('Episode length mismatch')
 
         return {
             'episode_index': df['episode_index'].to_numpy(),
-            'frame_index': df['frame_index'].to_numpy(),
+            'frame_index': frame_index,
             'timestamp': df['timestamp'].to_numpy(),
-            'state': np.stack(df['state'].to_numpy()),
-            'actions': np.stack(df['actions'].to_numpy()),
+            'command_pose': np.stack(df['action'].to_numpy()),
+            'joint_state': np.stack(df['observation.state'].to_numpy()),
+            'probe_calibration': np.stack(df['observation.meta.probe_cali_mtx'].to_numpy()),
             'task_index': df['task_index'].to_numpy(),
-            'prompt': df['prompt'].tolist(),
-            'us_gt': df['us_gt'].to_numpy(),
-            'stage': df['stage'].to_numpy()
+            'instruction': df['instruction.text'].tolist(),
+            'task': df['instruction.task'].tolist(),
+            'sub_task': df['instruction.sub_task'].tolist(),
+            'phantom': df['instruction.phantom'].tolist()
         }
 
 
-class USVLAImageLoader:
+class SonATAImageLoader:
     def __init__(
         self,
         metadata,
@@ -51,24 +107,102 @@ class USVLAImageLoader:
         image_mode='RGB',
         normalize='minus_one_one',
         center_crop=False,
-        cache_size=2
+        cache_size=2,
+        cache_dir=None
     ):
         self.metadata = metadata
-        self.image_size = (image_size, image_size) if isinstance(image_size, int) else image_size
+
+        if isinstance(image_size, int):
+            image_size = (image_size, image_size)
+
+        if image_size is None:
+            height, width = metadata.info['features']['observation.images.ultrasound']['shape'][:2]
+
+            if center_crop:
+                height = width = min(height, width)
+
+            image_size = (height, width)
+
+        self.image_size = tuple(image_size)
         self.image_mode = image_mode
         self.normalize = normalize
         self.center_crop = center_crop
         self.cache_size = cache_size
         self.cache = OrderedDict()
 
+        if image_mode not in ('RGB', 'L'):
+            raise ValueError(image_mode)
+
+        if normalize not in ('minus_one_one', 'zero_one'):
+            raise ValueError(normalize)
+
+        if cache_size < 1:
+            raise ValueError('cache_size must be positive')
+
+        self.cache_dir = None
+
+        if cache_dir is not None:
+            height, width = self.image_size
+            name = f'{height}x{width}_{image_mode}_crop{int(center_crop)}'
+            self.cache_dir = Path(cache_dir) / name
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def decode_episode(self, episode_index):
+        height, width = self.image_size
+        channels = 3 if self.image_mode == 'RGB' else 1
+        pixel_format = 'rgb24' if channels == 3 else 'gray'
+
+        filters = []
+
+        if self.center_crop:
+            source_shape = self.metadata.info['features']['observation.images.ultrasound']['shape']
+            side = min(source_shape[:2])
+            filters.append(f'crop={side}:{side}')
+
+        filters.append(f'scale={width}:{height}:flags=bilinear')
+
+        result = subprocess.run([
+            'ffmpeg',
+            '-hide_banner',
+            '-loglevel', 'error',
+            '-threads', '1',
+            '-i', str(self.metadata.video_path(episode_index)),
+            '-vf', ','.join(filters),
+            '-pix_fmt', pixel_format,
+            '-f', 'rawvideo',
+            'pipe:1'
+        ], capture_output=True, check=True)
+
+        episode_id = self.metadata.episode_ids[episode_index]
+        expected = self.metadata.lengths[episode_id]
+
+        array = np.frombuffer(result.stdout, dtype=np.uint8)
+
+        if array.size != expected * height * width * channels:
+            raise RuntimeError(f'Video frame count mismatch: {episode_id}')
+
+        return array.reshape(expected, height, width, channels).copy()
+
     def load_episode(self, episode_index):
         if episode_index not in self.cache:
-            df = pd.read_parquet(
-                self.metadata.paths[episode_index],
-                columns=['frame_index', 'ultrasound_rgb']
-            )
+            if self.cache_dir is None:
+                frames = self.decode_episode(episode_index)
+            else:
+                episode_id = self.metadata.episode_ids[episode_index]
+                path = self.cache_dir / f'episode_{episode_id:06d}.npy'
 
-            self.cache[episode_index] = dict(zip(df['frame_index'], df['ultrasound_rgb']))
+                if not path.exists():
+                    frames = self.decode_episode(episode_index)
+                    temp = path.with_name(
+                        f'.{path.stem}.{os.getpid()}.npy'
+                    )
+
+                    np.save(temp, frames)
+                    os.replace(temp, path)
+
+                frames = np.load(path, mmap_mode='r')
+
+            self.cache[episode_index] = frames
 
             if len(self.cache) > self.cache_size:
                 self.cache.popitem(last=False)
@@ -78,37 +212,17 @@ class USVLAImageLoader:
         return self.cache[episode_index]
 
     def __call__(self, episode_index, frame_index):
-        data = self.load_episode(episode_index)[frame_index]
+        frame = self.load_episode(episode_index)[frame_index]
 
-        if isinstance(data, dict):
-            source = BytesIO(data['bytes']) if data['bytes'] is not None else self.metadata.root / data['path']
-        else:
-            source = BytesIO(data)
-
-        with Image.open(source) as image:
-            image = image.convert(self.image_mode)
-
-            if self.center_crop:
-                width, height = image.size
-                side = min(width, height)
-                left = (width - side) // 2
-                top = (height - side) // 2
-                image = image.crop((left, top, left + side, top + side))
-
-            if self.image_size is not None:
-                image = image.resize(self.image_size[::-1], Image.Resampling.BILINEAR)
-
-            array = np.array(image, copy=True)
-
-        if array.ndim == 2:
-            array = array[..., None]
-
-        image = torch.from_numpy(array).permute(2, 0, 1).float() / 255.0
+        image = (
+            torch.from_numpy(np.array(frame, copy=True))
+            .permute(2, 0, 1)
+            .float()
+            / 255.0
+        )
 
         if self.normalize == 'minus_one_one':
             image = image * 2 - 1
-        elif self.normalize != 'zero_one':
-            raise ValueError(self.normalize)
 
         return image
 
@@ -127,18 +241,22 @@ class WorldModelDataset(Dataset):
         normalize='minus_one_one',
         center_crop=False,
         cache_size=2,
+        cache_dir=None,
         relative_frame='tool',
         output_rotation_type='euler'
     ):
         self.episodes = [metadata[i] for i in range(len(metadata))]
-        self.image_loader = image_loader if image_loader is not None else USVLAImageLoader(
+
+        self.image_loader = image_loader if image_loader is not None else SonATAImageLoader(
             metadata,
             image_size=image_size,
             image_mode=image_mode,
             normalize=normalize,
             center_crop=center_crop,
-            cache_size=cache_size
+            cache_size=cache_size,
+            cache_dir=cache_dir
         )
+
         self.context_length = context_length
         self.context_stride = context_stride
         self.rotation_type = rotation_type
@@ -148,7 +266,10 @@ class WorldModelDataset(Dataset):
         self.indices = [
             (episode_index, t, offset)
             for episode_index, episode in enumerate(self.episodes)
-            for t in range((context_length - 1) * context_stride, len(episode['frame_index']))
+            for t in range(
+                (context_length - 1) * context_stride,
+                len(episode['frame_index'])
+            )
             for offset in future_offsets
             if t + offset < len(episode['frame_index'])
         ]
@@ -162,9 +283,10 @@ class WorldModelDataset(Dataset):
         target_t = t + offset
 
         context_images = torch.stack([
-            torch.as_tensor(
-                self.image_loader(episode_index, int(episode['frame_index'][i]))
-            ).float()
+            self.image_loader(
+                episode_index,
+                int(episode['frame_index'][i])
+            )
             for i in range(
                 t - (self.context_length - 1) * self.context_stride,
                 t + 1,
@@ -172,19 +294,23 @@ class WorldModelDataset(Dataset):
             )
         ])
 
-        target_image = torch.as_tensor(
-            self.image_loader(episode_index, int(episode['frame_index'][target_t]))
-        ).float()
+        target_image = self.image_loader(
+            episode_index,
+            int(episode['frame_index'][target_t])
+        )
 
         action = relative_pose(
-            episode['state'][t],
-            episode['state'][target_t],
+            episode['command_pose'][t],
+            episode['command_pose'][target_t],
             rotation_type=self.rotation_type,
             reference_frame=self.relative_frame,
             output_rotation_type=self.output_rotation_type
         )
-        
-        time_offset = episode['timestamp'][target_t] - episode['timestamp'][t]
+
+        time_offset = (
+            episode['timestamp'][target_t]
+            - episode['timestamp'][t]
+        )
 
         return {
             'context_images': context_images,
@@ -204,23 +330,30 @@ class VAEDataset(Dataset):
         image_mode='RGB',
         normalize='minus_one_one',
         center_crop=False,
-        cache_size=2
+        cache_size=2,
+        cache_dir=None
     ):
         if frame_stride < 1:
             raise ValueError('frame_stride must be positive')
 
-        self.image_loader = image_loader if image_loader is not None else USVLAImageLoader(
+        self.image_loader = image_loader if image_loader is not None else SonATAImageLoader(
             metadata,
             image_size=image_size,
             image_mode=image_mode,
             normalize=normalize,
             center_crop=center_crop,
-            cache_size=cache_size
+            cache_size=cache_size,
+            cache_dir=cache_dir
         )
+
         self.indices = [
-            (episode_index, int(frame_index))
-            for episode_index, path in enumerate(metadata.paths)
-            for frame_index in pd.read_parquet(path, columns=['frame_index'])['frame_index'].iloc[::frame_stride]
+            (episode_index, frame_index)
+            for episode_index, episode_id in enumerate(metadata.episode_ids)
+            for frame_index in range(
+                0,
+                metadata.lengths[episode_id],
+                frame_stride
+            )
         ]
 
     def __len__(self):

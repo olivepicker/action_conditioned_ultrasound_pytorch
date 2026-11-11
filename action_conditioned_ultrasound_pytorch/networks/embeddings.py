@@ -36,7 +36,7 @@ class ActionEmbedding(nn.Module):
 
         self.register_buffer('scales', torch.tensor(
             [translation_scale] * 3 + [rotation_scale] * 3, dtype=torch.float32
-        ), persistent=False)
+        ))
         self.register_buffer('frequencies', 2. ** torch.arange(num_frequencies).float(), persistent=False)
 
         self.mlp = nn.Sequential(
