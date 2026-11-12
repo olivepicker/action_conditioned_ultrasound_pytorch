@@ -363,3 +363,102 @@ class VAEDataset(Dataset):
         episode_index, frame_index = self.indices[idx]
 
         return self.image_loader(episode_index, frame_index)
+
+    
+class GoalPolicyDataset(Dataset):
+    def __init__(
+        self,
+        world_dataset,
+        action_offset=15,
+        task_types=('navigation',)
+    ):
+        self.episodes = world_dataset.episodes
+        self.image_loader = world_dataset.image_loader
+        self.context_length = world_dataset.context_length
+        self.context_stride = world_dataset.context_stride
+        self.rotation_type = world_dataset.rotation_type
+        self.relative_frame = world_dataset.relative_frame
+        self.output_rotation_type = world_dataset.output_rotation_type
+        self.action_offset = action_offset
+
+        task_types = set(task_types) if task_types is not None else None
+
+        self.indices = [
+            (episode_index, t)
+            for episode_index, episode in enumerate(self.episodes)
+            if task_types is None or episode['task'][0] in task_types
+            for t in range(
+                (self.context_length - 1) * self.context_stride,
+                len(episode['frame_index']) - action_offset
+            )
+        ]
+
+    def __len__(self):
+        return len(self.indices)
+
+    def relative_action(self, source, target):
+        return relative_pose(
+            source,
+            target,
+            rotation_type=self.rotation_type,
+            reference_frame=self.relative_frame,
+            output_rotation_type=self.output_rotation_type
+        )
+
+    def __getitem__(self, idx):
+        episode_index, t = self.indices[idx]
+        episode = self.episodes[episode_index]
+
+        context_indices = np.arange(
+            t - (self.context_length - 1) * self.context_stride,
+            t + 1,
+            self.context_stride
+        )
+
+        target_t = t + self.action_offset
+        goal_t = len(episode['frame_index']) - 1
+
+        context_images = torch.stack([
+            self.image_loader(
+                episode_index,
+                int(episode['frame_index'][i])
+            )
+            for i in context_indices
+        ])
+
+        goal_image = self.image_loader(
+            episode_index,
+            int(episode['frame_index'][goal_t])
+        )
+
+        poses = episode['command_pose']
+
+        previous_actions = self.relative_action(
+            poses[context_indices[:-1]],
+            poses[context_indices[1:]]
+        )
+
+        expert_action = self.relative_action(
+            poses[t],
+            poses[target_t]
+        )
+
+        time_offset = (
+            episode['timestamp'][target_t]
+            - episode['timestamp'][t]
+        )
+
+        return {
+            'context_images': context_images,
+            'previous_actions': torch.as_tensor(
+                previous_actions, dtype=torch.float32
+            ),
+            'goal_image': goal_image,
+            'expert_action': torch.as_tensor(
+                expert_action, dtype=torch.float32
+            ),
+            'time_offset': torch.as_tensor(
+                time_offset, dtype=torch.float32
+            ),
+            'episode_id': int(episode['episode_index'][0])
+        }
